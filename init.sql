@@ -1,19 +1,4 @@
-CREATE TABLE air_quality_invalids (
-    unique_id TEXT,
-    indicator_id TEXT,
-    name TEXT,
-    measure TEXT,
-    measure_info TEXT,
-    geo_type_name TEXT,
-    geo_join_id TEXT,
-    geo_place_name TEXT,
-    time_period TEXT,
-    start_date TEXT,
-    data_value TEXT,
-    message TEXT
-);
-
-CREATE TABLE air_quality_valids (
+CREATE TABLE IF NOT EXISTS air_quality (
     unique_id INTEGER NOT NULL,
     indicator_id INTEGER NOT NULL,
     name TEXT NOT NULL,
