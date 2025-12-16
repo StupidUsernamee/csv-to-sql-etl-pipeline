@@ -1,6 +1,3 @@
-# FIXME
-
-
 import os
 import sys
 import psycopg2
@@ -20,30 +17,20 @@ conn = None
 # Establish database connection
 try:
     conn = psycopg2.connect(
-        database="postgres",
+        database=os.getenv("POSTGRES_DB"),
         user=os.getenv("POSTGRES_USER"),
         host=os.getenv("POSTGRES_HOST"),
         password=os.getenv("POSTGRES_PASS"),
         port=os.getenv("POSTGRES_PORT")
     )
 except:
-    # Fail fast if database connection cannot be established
-    print("connection to database failed.\nshuting down")
+    print("connection to database failed. shutting down")
     sys.exit(1)
 
-print("connection to database stablished.")
+print("connection to database established")
 
 
 def extract(file_path: str):
-    """
-    Reads a CSV file and yields each row as a dictionary.
-
-    Args:
-        file_path (str): Path to the CSV file
-
-    Yields:
-        dict: A single CSV row mapped by column names
-    """
     with open(file_path, 'r') as file:
         csv_reader = csv.DictReader(file)
         for row in csv_reader:
@@ -51,59 +38,39 @@ def extract(file_path: str):
 
 
 def transform(record: dict):
-    """
-    Transforms raw CSV record into typed values.
+    try:
+        record["Unique ID"] = int(record["Unique ID"])
+        record["Indicator ID"] = int(record["Indicator ID"])
+        record["Geo Join ID"] = int(record["Geo Join ID"])
 
-    Assumes data is clean and does not perform validation.
+        record["Name"] = str(record["Name"])
+        record["Measure"] = str(record["Measure"])
+        record["Measure Info"] = str(record["Measure Info"])
+        record["Geo Type Name"] = str(record["Geo Type Name"])
+        record["Geo Place Name"] = str(record["Geo Place Name"])
+        record["Time Period"] = str(record["Time Period"])
 
-    Args:
-        record (dict): Raw CSV record
+        record["Start_Date"] = (
+            datetime.strptime(record["Start_Date"], '%m/%d/%Y')
+            .date()
+            .strftime("%Y-%m-%d")
+        )
 
-    Returns:
-        tuple: (transformed_record, is_valid)
-    """
+        record["Data Value"] = float(record["Data Value"])
 
-    # Convert identifier fields to integers
-    record["Unique ID"] = int(record["Unique ID"])
-    record["Indicator ID"] = int(record["Indicator ID"])
-    record["Geo Join ID"] = int(record["Geo Join ID"])
+        record["Message"] = record["Message"] or None
 
-    # Ensure text fields are strings
-    record["Name"] = str(record["Name"])
-    record["Measure"] = str(record["Measure"])
-    record["Measure Info"] = str(record["Measure Info"])
-    record["Geo Type Name"] = str(record["Geo Type Name"])
-    record["Geo Place Name"] = str(record["Geo Place Name"])
-    record["Time Period"] = str(record["Time Period"])
+        record = list(record.values())
 
-    # Parse date and convert to PostgreSQL-compatible format
-    record["Start_Date"] = (
-        datetime.strptime(record["Start_Date"], '%m/%d/%Y')
-        .date()
-        .strftime("%Y-%m-%d")
-    )
-
-    # Convert numeric measurement
-    record["Data Value"] = float(record["Data Value"])
-
-    # Normalize empty message field to NULL
-    record["Message"] = str(record["Message"])
-    if record["Message"] == "":
-        record["Message"] = None
-
-    
-    record = list(record.values())
-
-    return (record, True)
+        return record, True
+    except Exception as e:
+        print(f"transform failed: {e}")
+        return None, False
 
 
 def load(batch: list):
-    """
-    Inserts a batch of records into the air_quality table.
+    print(f"inserting batch of size {len(batch)}")
 
-    Args:
-        batch (list): List of transformed records
-    """
     insert_query = """
         INSERT INTO air_quality (
             unique_id,
@@ -119,57 +86,50 @@ def load(batch: list):
             data_value,
             message
         ) VALUES (
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s
+            %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s
         );
     """
 
-    # Execute batch insert
     with conn.cursor() as cursor:
         cursor.executemany(insert_query, batch)
 
+    conn.commit()
+    print("batch committed")
+
 
 def init_db():
-    """
-    Initializes database schema using SQL file.
-    """
+    print("initializing database")
     with conn.cursor() as cursor:
         cursor.execute(open("init.sql", 'r').read())
 
 
 if __name__ == "__main__":
     try:
-        # Initialize database schema
         init_db()
 
         buffer = []
+        total = 0
 
-        # Extract, transform, and batch-load records
         for record in extract('data/Air_Quality.csv'):
-            record, _ = transform(record)
+            record, ok = transform(record)
+            if not ok:
+                continue
+
             buffer.append(record)
 
             if len(buffer) >= BATCH_SIZE:
                 load(buffer)
+                total += len(buffer)
+                print(f"total rows inserted: {total}")
                 buffer.clear()
 
-        # Load remaining records
-        if len(buffer) > 0:
+        if buffer:
             load(buffer)
-
-        buffer.clear()
+            total += len(buffer)
+            print(f"total rows inserted: {total}")
 
     finally:
-        # Ensure database connection is closed
         if conn:
             conn.close()
+            print("connection closed")
